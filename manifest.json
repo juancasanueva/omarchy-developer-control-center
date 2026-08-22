@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.juancasanueva.developer-control-center",
+  "name": "Developer Control Center",
+  "version": "1.0.0",
+  "author": "Juan Casanueva",
+  "license": "MIT",
+  "description": "See your projects, containers, services, ports, and machines from one keyboard-first panel",
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Developer Control Center",
+    "description": "Git repositories, Docker containers, local services, ports, SSH hosts and what needs attention",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "barLabel": "DEV",
+      "barFormat": "full",
+      "gitRefreshInterval": 60,
+      "dockerRefreshInterval": 15,
+      "serviceRefreshInterval": 10,
+      "machineRefreshInterval": 120,
+      "probeMachines": true,
+      "gitUi": "lazygit",
+      "containerUi": "lazydocker",
+      "scanDepth": 2
+    },
+    "schema": [
+      { "key": "barLabel", "type": "string", "label": "Bar label", "defaultValue": "DEV" },
+      { "key": "barFormat", "type": "enum", "label": "Bar format", "options": ["full", "rich", "compact"], "defaultValue": "full", "description": "full: DEV ⚠ 2 · rich: DEV 5 ● 2 ⚠ · compact: ⚠ 2" },
+      { "key": "scanDepth", "type": "integer", "label": "Project scan depth", "min": 1, "max": 6, "step": 1, "defaultValue": 2 },
+      { "key": "editor", "type": "string", "label": "Editor command", "defaultValue": "", "description": "Empty follows the Omarchy default editor" },
+      { "key": "terminal", "type": "string", "label": "Terminal command", "defaultValue": "", "description": "Empty uses the system default terminal" },
+      { "key": "gitUi", "type": "string", "label": "Git UI", "defaultValue": "lazygit" },
+      { "key": "containerUi", "type": "string", "label": "Container UI", "defaultValue": "lazydocker" },
+      { "key": "gitRefreshInterval", "type": "integer", "label": "Git refresh (seconds)", "min": 5, "max": 3600, "step": 5, "defaultValue": 60 },
+      { "key": "dockerRefreshInterval", "type": "integer", "label": "Docker refresh (seconds)", "min": 5, "max": 3600, "step": 5, "defaultValue": 15 },
+      { "key": "serviceRefreshInterval", "type": "integer", "label": "Port refresh (seconds)", "min": 5, "max": 3600, "step": 5, "defaultValue": 10 },
+      { "key": "machineRefreshInterval", "type": "integer", "label": "Machine probe (seconds)", "min": 30, "max": 3600, "step": 30, "defaultValue": 120 },
+      { "key": "probeMachines", "type": "boolean", "label": "Ping SSH hosts", "defaultValue": true }
+    ]
+  }
+}
