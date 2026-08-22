@@ -12,7 +12,7 @@ dest="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$id"
 
 mkdir -p "$dest"
 rsync -a --delete \
-  --exclude '.git' --exclude '.atl' --exclude 'node_modules' \
+  --exclude '.git' --exclude '.atl' --exclude '.codegraph' --exclude 'node_modules' \
   --exclude 'PRD.md' --exclude 'test' --exclude 'sync.sh' \
   "$src/" "$dest/"
 
