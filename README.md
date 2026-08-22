@@ -141,6 +141,11 @@ mutually exclusive: with letters doing double duty, typing `plug` jumped to
 Projects on `p`, ate `l` as a movement key, and arrived as `ug`. One key, one
 meaning.
 
+Each section name in the panel underlines the letter that jumps to it, so the
+shortcut is shown where you are already looking rather than spelled out again
+in a footer — which is what the hint line was doing until it grew wider than
+the panel.
+
 ## Install
 
 ```bash

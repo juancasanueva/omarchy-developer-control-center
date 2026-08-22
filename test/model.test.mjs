@@ -23,7 +23,7 @@ const Model = new Function(
     jumpSection, activate, back, typeSearch, clearSearch, detailRows,
     searchResults, scoreMatch,
     actionsFor, terminalCommand, tuiCommand, editorCommand, resolveEditor,
-    emptyMessage, overviewSections, heroMeta
+    emptyMessage, overviewSections, heroMeta, sectionChips, hintText
   }`
 )()
 
@@ -906,6 +906,38 @@ test("actionsFor attention items delegate to the underlying resource", () => {
   const items = Model.computeAttention(data(), config)
   const a = Model.actionsFor({ kind: "attention", ref: items[0] }, config, { home: HOME }, data())
   assert.ok(a.some(x => x.id === "gitui"))
+})
+
+test("every section chip begins with its own shortcut key", () => {
+  // The panel underlines the first letter of each label to teach the
+  // shortcut. If a label were ever renamed so its first letter no longer
+  // matched, that underline would be advertising a key that does nothing.
+  const chips = Model.sectionChips()
+  assert.equal(chips.length, Object.keys(Model.SECTION_KEYS).length)
+  for (const chip of chips) {
+    assert.equal(chip.label.charAt(0).toLowerCase(), chip.key, `${chip.label} does not start with ${chip.key}`)
+    assert.notEqual(Model.sectionForKey(chip.key), "", `${chip.key} is not a section key`)
+  }
+})
+
+test("hintText only lists keys that do something in the current state", () => {
+  const ui = Model.initialUi()
+  assert.match(Model.hintText(ui), /\/ search/)
+  assert.match(Model.hintText(ui), /esc close/)
+  // The section letters are taught by the chips, not repeated down here.
+  assert.doesNotMatch(Model.hintText(ui), /sections/)
+  assert.match(Model.hintText({ ...ui, detail: { kind: "project", id: "/x" } }), /esc back/)
+  // `r` still refreshes over a detail, so the detail hint has to say so.
+  assert.match(Model.hintText({ ...ui, detail: { kind: "project", id: "/x" } }), /r refresh/)
+  // While searching, `r` is a character in the query, not a refresh.
+  assert.doesNotMatch(Model.hintText({ ...ui, searching: true }), /r refresh/)
+  assert.match(Model.hintText({ ...ui, searching: true }), /esc clear/)
+  assert.match(Model.hintText({ ...ui, confirm: { action: {} } }), /esc cancel/)
+  // Short enough to sit on one line. The panel card is ~60 characters wide at
+  // caption size; the line this replaced was 78 and bled past both edges.
+  for (const state of [ui, { ...ui, detail: {} }, { ...ui, searching: true }, { ...ui, confirm: {} }]) {
+    assert.ok(Model.hintText(state).length <= 56, Model.hintText(state))
+  }
 })
 
 test("heroMeta counts what was found and pluralises honestly", () => {

@@ -1410,6 +1410,31 @@ function sectionKeyFor(view) {
   return ""
 }
 
+// The section chips. Each label begins with its own shortcut key, so the
+// panel can underline that first letter instead of spelling the shortcuts out
+// again underneath — the hint line has no room for a list this long, and a
+// key printed where the eye already is beats one printed in a footer.
+function sectionChips() {
+  return [
+    { key: "o", label: "Overview" },
+    { key: "p", label: "Projects" },
+    { key: "c", label: "Containers" },
+    { key: "s", label: "Services" },
+    { key: "m", label: "Machines" },
+    { key: "a", label: "Attention" },
+    { key: "t", label: "Tools" }
+  ]
+}
+
+// Only the keys that do something in the current state, so the line stays
+// short enough to fit the panel.
+function hintText(ui) {
+  if (ui && ui.confirm) return "← → choose · ⏎ confirm · esc cancel"
+  if (ui && ui.detail) return "↑↓ select · ⏎ run · r refresh · esc back"
+  if (ui && ui.searching) return "↑↓ select · ⏎ open · esc clear"
+  return "↑↓ select · ⏎ open · / search · r refresh · esc close"
+}
+
 function initialUi() {
   return { view: "overview", index: 0, query: "", searching: false, detail: null, confirm: null, returnIndex: 0 }
 }

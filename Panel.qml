@@ -254,24 +254,46 @@ Panel {
           visible: !root.ui.searching
 
           Repeater {
-            model: [
-              { key: "o", label: "Overview" }, { key: "p", label: "Projects" }, { key: "c", label: "Containers" },
-              { key: "s", label: "Services" }, { key: "m", label: "Machines" }, { key: "a", label: "Attention" },
-              { key: "t", label: "Tools" }
-            ]
-            delegate: Text {
+            model: Model.sectionChips()
+
+            // The shortcut is taught by underlining the letter it already
+            // starts with, rather than by a list of bare letters in the
+            // footer — which is where the hint line ran out of room.
+            delegate: Item {
+              id: chip
               required property var modelData
               readonly property bool current: Model.sectionForKey(modelData.key) === root.ui.view
-              text: modelData.label
-              color: current ? Color.accent : root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: current
-              textFormat: Text.PlainText
+              readonly property color tint: current ? Color.accent : root.dim
+              implicitWidth: chipRow.implicitWidth
+              implicitHeight: chipRow.implicitHeight
+
+              Row {
+                id: chipRow
+                spacing: 0
+
+                Text {
+                  text: chip.modelData.label.charAt(0)
+                  color: chip.current ? Color.accent : root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: chip.current
+                  font.underline: true
+                  textFormat: Text.PlainText
+                }
+                Text {
+                  text: chip.modelData.label.slice(1)
+                  color: chip.tint
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: chip.current
+                  textFormat: Text.PlainText
+                }
+              }
+
               MouseArea {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.jump(modelData.key)
+                onClicked: root.jump(chip.modelData.key)
               }
             }
           }
@@ -527,15 +549,14 @@ Panel {
 
         Text {
           width: parent.width
-          text: root.ui.detail
-            ? "↑↓ select   ⏎ run   esc back   r refresh"
-            : root.ui.searching
-              ? "↑↓ select   ⏎ open   esc clear   / search"
-              : "↑↓ select   ⏎ open   / search   o p c s m a t sections   r refresh   esc close"
+          text: Model.hintText(root.ui)
           color: Color.muted
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           horizontalAlignment: Text.AlignHCenter
+          // A line wider than the card would otherwise bleed past both edges
+          // instead of being clipped, which is how the old one hid its length.
+          wrapMode: Text.WordWrap
           textFormat: Text.PlainText
         }
       }
