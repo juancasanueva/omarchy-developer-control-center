@@ -5,8 +5,9 @@
 #
 # The whole emission is capped in bytes so an oversized config, or one whose
 # Include directives fan out into far more text than they look like, cannot
-# produce an unbounded string. A directive cut in half fails to match and is
-# skipped by the parser.
+# produce an unbounded string. The producer reads at most cap + 1 bytes. If the
+# extra byte exists, it emits no configuration and exits 65 so the reader can
+# reject the whole result rather than parse a partial directive.
 set -u
 
 max_bytes=262144
@@ -31,5 +32,12 @@ emit() {
   done < "$file"
 }
 
-emit "$config" 0 | head -c "$max_bytes"
-exit 0
+umask 077
+tmp=$(mktemp) || exit 1
+trap 'rm -f "$tmp"' EXIT
+
+emit "$config" 0 | head -c $((max_bytes + 1)) > "$tmp"
+bytes=$(wc -c < "$tmp") || exit 1
+(( bytes > max_bytes )) && exit 65
+
+cat -- "$tmp"

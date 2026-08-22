@@ -196,7 +196,7 @@ omarchy bar set io.github.juancasanueva.developer-control-center projectRoots '[
 | `gitRefreshInterval` | `60` | Seconds between repository scans |
 | `dockerRefreshInterval` | `15` | Seconds between container polls |
 | `serviceRefreshInterval` | `10` | Seconds between port scans |
-| `machineRefreshInterval` | `120` | Seconds between SSH host pings |
+| `machineRefreshInterval` | `120` | Seconds between re-reads of `~/.ssh/config` and host pings |
 | `probeMachines` | `true` | Whether to ping SSH hosts at all |
 | `expectedPorts` | none | `{"8080": "backend-api"}` — warns when something else takes the port |
 | `attention` | all on except `machineUnreachable` | Which warnings count |
@@ -249,16 +249,25 @@ defensive on purpose:
   panel renders those differently, every time.
 - Malformed JSON lines, unparseable `ss` rows and broken repositories are
   skipped individually; one bad entry never takes out the scan around it.
-- Every scan caps its own output in bytes, and `Model.js` caps both the text it
-  accepts and the number of entries it collects from it. The scans run on a
-  timer inside a process that lives for the whole session, so no single machine
-  — a thousand containers, a repository with a huge untracked tree — can make
-  one of them allocate without bound. An entry cut in half by a ceiling is
-  simply one the parser skips.
-- Every external command is a `timeout`-wrapped subprocess with an argv array.
-  Nothing discovered on your machine is ever spliced into a shell string, and
-  identifiers that would travel as arguments are rejected if they could pass as
-  options — an SSH alias called `-oProxyCommand=…` gets no Connect action.
+- Every recurring discovery producer caps its output in bytes at the source,
+  and `Model.js` caps parser entry counts. The bounded file reads also validate
+  the collector's raw byte length before accepting decoded text. The scans run
+  on a timer inside a process that lives for the whole session, so no single
+  machine — a thousand containers, a repository with a huge untracked tree —
+  can make one of them allocate without bound.
+- That includes the two files read rather than scanned. `~/.ssh/config` goes
+  through a script that stops at 256 KiB with the `Include`s already expanded,
+  and Omarchy's default-editor file is read with `head -c`. Both are
+  user-writable, and a ceiling checked after the whole file is in memory is no
+  ceiling at all. Each producer reads one extra byte and reports overflow via
+  its exit status without publishing partial data. An oversized SSH result is
+  rejected wholesale; an oversized editor path is treated as absent because a
+  half path could name the wrong binary.
+- External commands use argv arrays. Potentially blocking scans and probes are
+  timeout-wrapped; the bounded local editor and SSH reads are not. Nothing
+  discovered on your machine is ever spliced into a shell string, and
+  identifiers that would travel as arguments are rejected if they could pass
+  as options — an SSH alias called `-oProxyCommand=…` gets no Connect action.
 - Actions are detached, so they survive the plugin reload that a code change
   triggers.
 
@@ -271,7 +280,7 @@ telemetry, and no network call except the SSH host pings you can switch off.
 
 ```bash
 ./sync.sh                                    # copy into ~/.config/omarchy/plugins and rescan
-node --test test/model.test.mjs              # the rules
+node --test test/*.test.mjs                  # model and producer boundaries
 journalctl --user -t omarchy-shell -f        # QML errors
 ```
 

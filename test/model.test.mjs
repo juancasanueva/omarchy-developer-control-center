@@ -12,12 +12,14 @@ const Model = new Function(
   return {
     DEFAULT_CONFIG, normalizeConfig, expandHome, collapseHome, isSafeArg,
     MAX_COLLECTOR_BYTES, clampText, MAX_REPOS, MAX_CONTAINERS, MAX_SERVICES, MAX_HOSTS,
+    MAX_SSH_BYTES, MAX_EDITOR_BYTES, READ_OVERFLOW_EXIT, boundedRead,
     parseRepoScan, parsePorcelain, repoState, repoIcon, repoSummary, remoteWebUrl, sortRepos,
     parseDockerPs, parseHealth, parsePortMappings, parseComposeProject, parseExitCode,
     containerIcon, containerSummary, groupContainers, sortContainers,
     parsePorts, parseSsLine, parseProcLines, enrichServices, detectTechnology, serviceIcon,
     serviceSummary, isUnidentifiedPort, sortServices,
-    parseSshConfig, parseProbe, applyProbe, machineIcon, machineSummary,
+    parseSshConfig, parseProbe, applyProbe, resetProbe, nextProbeGeneration,
+    acceptsProbeResult, carryProbe, machineIcon, machineSummary,
     parseTools, TOOL_CATALOG, toolCategories, isLaunchable,
     computeAttention, attentionSummary, barState, barText,
     initialUi, SECTION_KEYS, sectionForKey, rowsFor, selectableIndexes, moveSelection,
@@ -564,6 +566,66 @@ test("parseProbe and applyProbe attach availability and latency", () => {
   assert.deepEqual(Model.parseProbe("garbage\n\n"), {})
 })
 
+test("carryProbe keeps reachability across a re-read while probing is enabled", () => {
+  const carried = Model.carryProbe(machines, Model.parseSshConfig(sshConfig), true)
+  const by = Object.fromEntries(carried.map(m => [m.alias, m]))
+  assert.equal(by["dev-server"].status, "up")
+  assert.equal(by["dev-server"].latency, 18)
+  assert.equal(by["build-server"].status, "down")
+  assert.equal(by["build-server"].latency, 0)
+})
+
+test("carryProbe leaves a host it has never seen unknown", () => {
+  const fresh = Model.parseSshConfig(sshConfig + "\nHost new-box\n  HostName 10.0.0.9\n")
+  const by = Object.fromEntries(Model.carryProbe(machines, fresh, true).map(m => [m.alias, m]))
+  assert.equal(by["new-box"].status, "unknown")
+  assert.equal(by["new-box"].latency, 0)
+  assert.equal(by["dev-server"].status, "up")
+})
+
+test("carryProbe matches by alias, so a host that moved keeps its reachability", () => {
+  const moved = Model.parseSshConfig("Host dev-server\n  HostName 10.9.9.9\n")
+  assert.equal(moved[0].hostname, "10.9.9.9")
+  assert.equal(Model.carryProbe(machines, moved, true)[0].status, "up")
+  assert.equal(Model.carryProbe(machines, moved, true)[0].latency, 18)
+})
+
+test("carryProbe treats a missing previous list as nothing known yet", () => {
+  const hosts = Model.parseSshConfig(sshConfig)
+  assert.deepEqual(Model.carryProbe(null, hosts, true).map(m => m.status), hosts.map(() => "unknown"))
+  assert.deepEqual(Model.carryProbe([], hosts, true).map(m => m.status), hosts.map(() => "unknown"))
+})
+
+test("carryProbe leaves fresh hosts unknown while probing is disabled", () => {
+  const hosts = Model.parseSshConfig(sshConfig)
+  const carried = Model.carryProbe(machines, hosts, false)
+  assert.deepEqual(carried.map(m => m.status), hosts.map(() => "unknown"))
+  assert.deepEqual(carried.map(m => m.latency), hosts.map(() => 0))
+})
+
+test("resetProbe synchronously clears existing reachability", () => {
+  const reset = Model.resetProbe(machines)
+  assert.deepEqual(reset.map(m => m.status), machines.map(() => "unknown"))
+  assert.deepEqual(reset.map(m => m.latency), machines.map(() => 0))
+})
+
+test("probe generations reject stale results across disable and re-enable", () => {
+  let generation = Model.nextProbeGeneration(0)
+  const inFlight = generation
+  generation = Model.nextProbeGeneration(generation) // disable
+  assert.equal(Model.acceptsProbeResult(inFlight, generation, false), false)
+  generation = Model.nextProbeGeneration(generation) // re-enable
+  assert.equal(Model.acceptsProbeResult(inFlight, generation, true), false)
+  assert.equal(Model.acceptsProbeResult(generation, generation, true), true)
+})
+
+test("a new host cycle invalidates the previous generation even while enabled", () => {
+  const oldCycle = Model.nextProbeGeneration(4)
+  const newCycle = Model.nextProbeGeneration(oldCycle)
+  assert.equal(Model.acceptsProbeResult(oldCycle, newCycle, true), false)
+  assert.equal(Model.acceptsProbeResult(newCycle, newCycle, false), false)
+})
+
 test("machineIcon and machineSummary", () => {
   const by = Object.fromEntries(machines.map(m => [m.alias, m]))
   assert.equal(Model.machineIcon(by["dev-server"]), "●")
@@ -881,6 +943,25 @@ test("tuiCommand opens a command inside a terminal with an app id", () => {
     ["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--app-id=org.omarchy.lazygit", "--dir=/p", "-e", "lazygit"])
   assert.deepEqual(Model.tuiCommand(["ping", "-c", "4", "host"], "", { hold: true }),
     ["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--app-id=org.omarchy.ping", "--hold", "-e", "ping", "-c", "4", "host"])
+})
+
+test("boundedRead validates producer status and raw byte length", () => {
+  assert.equal(Model.boundedRead("zed\n", 4, 0, 0, Model.MAX_EDITOR_BYTES), "zed\n")
+  assert.equal(Model.boundedRead("zed\n", 4, Model.READ_OVERFLOW_EXIT, 0, Model.MAX_EDITOR_BYTES), null)
+  assert.equal(Model.boundedRead("zed\n", 4, 0, 1, Model.MAX_EDITOR_BYTES), null)
+  assert.equal(Model.boundedRead("zed\n", Model.MAX_EDITOR_BYTES + 1, 0, 0, Model.MAX_EDITOR_BYTES), null)
+  assert.equal(Model.boundedRead(null, 0, 0, 0, Model.MAX_EDITOR_BYTES), null)
+})
+
+test("boundedRead uses UTF-8 bytes rather than JavaScript character length", () => {
+  const atLimit = "€".repeat(1365) + "x"
+  const overLimit = "€".repeat(1366)
+  assert.equal(atLimit.length, 1366)
+  assert.equal(Buffer.byteLength(atLimit), Model.MAX_EDITOR_BYTES)
+  assert.equal(Model.boundedRead(atLimit, Buffer.byteLength(atLimit), 0, 0, Model.MAX_EDITOR_BYTES), atLimit)
+  assert.ok(overLimit.length < Model.MAX_EDITOR_BYTES)
+  assert.ok(Buffer.byteLength(overLimit) > Model.MAX_EDITOR_BYTES)
+  assert.equal(Model.boundedRead(overLimit, Buffer.byteLength(overLimit), 0, 0, Model.MAX_EDITOR_BYTES), null)
 })
 
 test("resolveEditor and editorCommand handle terminal and gui editors", () => {

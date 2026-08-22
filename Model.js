@@ -53,12 +53,20 @@ var MIN_INTERVAL = 5
 // ---------------------------------------------------------------------------
 //
 // The plugin lives inside the long-lived shell process, so a single oversized
-// response must not be able to pin memory for the rest of the session. The
-// scripts bound their own output; these limits are the second line of defence,
-// and the only one for ~/.ssh/config, which is read straight off disk with no
-// script in between.
+// response must not be able to pin memory for the rest of the session. Every
+// producer stops reading at its own ceiling, so nothing oversized is ever
+// allocated here in the first place; these limits are the second line of
+// defence for a producer that one day forgets.
 
 var MAX_COLLECTOR_BYTES = 1048576
+
+// These mirror the caps their producers apply. Producers read cap + 1 bytes
+// internally, exit with READ_OVERFLOW_EXIT when that extra byte exists, and
+// publish no partial payload. Successful collector output cannot exceed the
+// corresponding cap.
+var MAX_SSH_BYTES = 262144
+var MAX_EDITOR_BYTES = 4096
+var READ_OVERFLOW_EXIT = 65
 
 // A payload can be under the byte ceiling and still be pathologically dense,
 // so the parsers stop collecting once these many entries exist rather than
@@ -75,6 +83,17 @@ function clampText(text, limit) {
   if (typeof text !== "string") return text
   var max = typeof limit === "number" && isFinite(limit) && limit > 0 ? limit : MAX_COLLECTOR_BYTES
   return text.length > max ? text.slice(0, max) : text
+}
+
+// Process exit and collector completion can arrive in either order, so the
+// service joins them before calling this helper. `byteLength` comes from the
+// collector's raw QByteArray; JavaScript string length counts UTF-16 code
+// units and cannot enforce a UTF-8 byte ceiling.
+function boundedRead(text, byteLength, exitCode, exitStatus, limit) {
+  if (exitCode !== 0 || exitStatus !== 0 || typeof text !== "string") return null
+  if (typeof byteLength !== "number" || !isFinite(byteLength) || byteLength < 0) return null
+  if (typeof limit !== "number" || !isFinite(limit) || limit < 0 || byteLength > limit) return null
+  return text
 }
 
 function isObject(value) {
@@ -700,6 +719,38 @@ function applyProbe(hosts, probe) {
     if (!result) return merge(h, { status: "unknown", latency: 0 })
     return merge(h, { status: result.ok ? "up" : "down", latency: result.ok ? result.ms : 0 })
   })
+}
+
+function resetProbe(hosts) {
+  return applyProbe(hosts, {})
+}
+
+// A probe captures the current generation when it starts. Setting transitions
+// and successful SSH re-reads advance it, so late results cannot cross either
+// a disable/re-enable boundary or a host-list boundary.
+function nextProbeGeneration(current) {
+  return typeof current === "number" && isFinite(current) && current >= 0 ? current + 1 : 1
+}
+
+function acceptsProbeResult(startedGeneration, currentGeneration, enabled) {
+  return enabled === true && startedGeneration === currentGeneration
+}
+
+// The configuration is re-read on a timer, and a re-read builds fresh hosts
+// that know nothing about reachability. Without carrying the last probe over,
+// every host would blink back to unknown between the re-read and the next
+// ping. Matching is by alias, which is what the user connects to; a host that
+// changed hostname keeps its result, and one that is new since the last read
+// has no entry and so stays unknown.
+function carryProbe(previous, hosts, enabled) {
+  if (!enabled) return hosts || []
+  var known = previous || []
+  var probe = {}
+  for (var i = 0; i < known.length; i++) {
+    if (known[i].status === "up") probe[known[i].alias] = { ok: true, ms: known[i].latency }
+    else if (known[i].status === "down") probe[known[i].alias] = { ok: false, ms: 0 }
+  }
+  return applyProbe(hosts, probe)
 }
 
 function machineIcon(m) {

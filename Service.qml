@@ -92,7 +92,8 @@ Item {
   }
 
   function refreshMachines() {
-    sshFile.reload()
+    if (sshProc.running || sshProc.awaitingResult) return
+    sshProc.running = true
   }
 
   function refreshTools() {
@@ -132,18 +133,41 @@ Item {
   }
 
   property var rawServices: null
+  // Probe generations change on setting transitions and successful host-list
+  // reads. A process result is admitted only for the generation it started in.
+  property int probeGeneration: 0
+  property bool probeSettingKnown: false
+  property bool previousProbeSetting: false
+
+  function advanceProbeGeneration() {
+    probeGeneration = Model.nextProbeGeneration(probeGeneration)
+  }
+
+  function syncProbeSetting() {
+    var enabled = config.probeMachines
+    if (probeSettingKnown && enabled === previousProbeSetting) return
+    probeSettingKnown = true
+    previousProbeSetting = enabled
+    advanceProbeGeneration()
+    if (!enabled && machines !== null) machines = Model.resetProbe(machines)
+  }
 
   function probeMachines(hosts) {
-    if (!config.probeMachines || probeProc.running || !hosts || hosts.length === 0) return
+    if (!config.probeMachines || probeProc.running || probeProc.awaitingResult || !hosts || hosts.length === 0) return
     var args = []
     for (var i = 0; i < hosts.length && i < 100; i++) args.push(hosts[i].alias, hosts[i].hostname)
     probeProc.command = ["bash", script("probe-hosts.sh")].concat(args)
+    probeProc.startedGeneration = probeGeneration
     probeProc.running = true
   }
 
-  onConfigChanged: refreshAll()
+  onConfigChanged: {
+    syncProbeSetting()
+    refreshAll()
+  }
 
   Component.onCompleted: {
+    syncProbeSetting()
     editorProc.running = true
     refreshAll()
   }
@@ -152,8 +176,8 @@ Item {
   //
   // Each collector keeps the previous value when a scan fails: a momentary
   // failure should not erase what the user could see a second ago. Every
-  // response is passed through Model.clampText because the scripts already
-  // bound their own output and this is the backstop if one ever does not.
+  // response is still put through a Model ceiling: the scripts already bound
+  // their own output, and this is the backstop if one ever does not.
 
   Process {
     id: repoProc
@@ -193,11 +217,37 @@ Item {
 
   Process {
     id: probeProc
+    property bool awaitingResult: false
+    property bool outputFinished: false
+    property bool processFinished: false
+    property int startedGeneration: -1
+
+    function publishResult() {
+      if (!outputFinished || !processFinished) return
+      var accepted = Model.acceptsProbeResult(startedGeneration, root.probeGeneration,
+                                              root.config.probeMachines)
+      var retryCurrent = root.config.probeMachines && startedGeneration !== root.probeGeneration
+      awaitingResult = false
+      if (accepted && root.machines !== null)
+        root.machines = Model.applyProbe(root.machines, Model.parseProbe(Model.clampText(probeOutput.text)))
+      if (retryCurrent) root.probeMachines(root.machines)
+    }
+
+    onStarted: {
+      awaitingResult = true
+      outputFinished = false
+      processFinished = false
+    }
+    onExited: function(exitCode, exitStatus) {
+      processFinished = true
+      publishResult()
+    }
     stdout: StdioCollector {
+      id: probeOutput
       waitForEnd: true
       onStreamFinished: {
-        if (root.machines === null) return
-        root.machines = Model.applyProbe(root.machines, Model.parseProbe(Model.clampText(text)))
+        probeProc.outputFinished = true
+        probeProc.publishResult()
       }
     }
   }
@@ -217,25 +267,99 @@ Item {
   // The editor Omarchy would launch, so the project action can name it.
   Process {
     id: editorProc
-    command: ["bash", "-c", "cat \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/defaults/editor\" 2>/dev/null || true"]
-    // A path, not a listing, so it gets a much tighter ceiling than the rest.
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.defaultEditor = Model.clampText(text, 4096) }
+    property bool awaitingResult: false
+    property bool outputFinished: false
+    property bool processFinished: false
+    property int resultCode: -1
+    property int resultStatus: -1
+
+    command: ["bash", script("editor-path.sh")]
+
+    function publishResult() {
+      if (!outputFinished || !processFinished) return
+      var payload = Model.boundedRead(editorOutput.text, editorOutput.data.byteLength,
+                                      resultCode, resultStatus, Model.MAX_EDITOR_BYTES)
+      awaitingResult = false
+      // On overflow or failure, keep the empty fallback rather than ever
+      // interpreting a truncated path as another executable.
+      if (payload !== null) root.defaultEditor = payload
+    }
+
+    onStarted: {
+      awaitingResult = true
+      outputFinished = false
+      processFinished = false
+      resultCode = -1
+      resultStatus = -1
+    }
+    onExited: function(exitCode, exitStatus) {
+      resultCode = exitCode
+      resultStatus = exitStatus
+      processFinished = true
+      publishResult()
+    }
+    stdout: StdioCollector {
+      id: editorOutput
+      waitForEnd: true
+      onStreamFinished: {
+        editorProc.outputFinished = true
+        editorProc.publishResult()
+      }
+    }
   }
 
   // Only host metadata is read out of the SSH configuration; keys, identity
-  // files and proxy commands are dropped by the parser.
-  FileView {
-    id: sshFile
-    path: root.home ? root.home + "/.ssh/config" : ""
-    watchChanges: true
-    printErrors: false
-    onFileChanged: reload()
-    onLoaded: {
-      var hosts = Model.parseSshConfig(Model.clampText(text()))
-      root.machines = hosts === null ? [] : hosts
+  // files and proxy commands are dropped by the parser. The script does the
+  // reading — and stops at its own byte ceiling — because FileView has no
+  // size limit of any kind and would load the whole user-writable file into
+  // this process before anything here could look at it. With no config the
+  // script exits 0 with no output, which parses as an empty list of hosts.
+  Process {
+    id: sshProc
+    property bool awaitingResult: false
+    property bool outputFinished: false
+    property bool processFinished: false
+    property int resultCode: -1
+    property int resultStatus: -1
+
+    command: ["bash", script("ssh-config.sh")]
+
+    function publishResult() {
+      if (!outputFinished || !processFinished) return
+      var payload = Model.boundedRead(sshOutput.text, sshOutput.data.byteLength,
+                                      resultCode, resultStatus, Model.MAX_SSH_BYTES)
+      awaitingResult = false
+      if (payload === null) {
+        if (root.machines === null) root.machines = []
+        return
+      }
+      var hosts = Model.parseSshConfig(payload)
+      root.advanceProbeGeneration()
+      root.machines = hosts === null ? [] : Model.carryProbe(root.machines, hosts, root.config.probeMachines)
       root.probeMachines(root.machines)
     }
-    onLoadFailed: if (root.machines === null) root.machines = []
+
+    onStarted: {
+      awaitingResult = true
+      outputFinished = false
+      processFinished = false
+      resultCode = -1
+      resultStatus = -1
+    }
+    onExited: function(exitCode, exitStatus) {
+      resultCode = exitCode
+      resultStatus = exitStatus
+      processFinished = true
+      publishResult()
+    }
+    stdout: StdioCollector {
+      id: sshOutput
+      waitForEnd: true
+      onStreamFinished: {
+        sshProc.outputFinished = true
+        sshProc.publishResult()
+      }
+    }
   }
 
   // ---- Timers --------------------------------------------------------------
@@ -265,10 +389,15 @@ Item {
     onTriggered: root.refreshServices()
   }
 
+  // Re-reads the configuration and then probes. There is no file watch any
+  // more, and a periodic re-read also picks up edits to `Include`d files,
+  // which a watch on the top-level config never did. It runs even with
+  // probing off so the host list stays current; probeMachines returns early
+  // in that case, so nothing is pinged.
   Timer {
     interval: Math.max(10000, root.config.machineRefreshInterval * 1000)
     repeat: true
-    running: root.config.probeMachines
-    onTriggered: root.probeMachines(root.machines)
+    running: true
+    onTriggered: root.refreshMachines()
   }
 }
