@@ -159,6 +159,20 @@ Bind a key by adding this to `~/.config/hypr/bindings.lua`:
 o.bind("SUPER + CTRL + D", "Dev Center", "omarchy-shell shell toggle io.github.juancasanueva.developer-control-center")
 ```
 
+## Remove
+
+```bash
+omarchy plugin disable io.github.juancasanueva.developer-control-center
+omarchy plugin remove io.github.juancasanueva.developer-control-center
+```
+
+Disabling takes the widget out of the bar and stops the background service;
+removing deletes the plugin folder. Either way nothing else on your system is
+touched — this plugin writes no files outside its own directory, installs
+nothing, and changes no configuration but its own entry in
+`~/.config/omarchy/shell.json`, which `disable` removes. If you added the
+keybinding above, delete that line from `~/.config/hypr/bindings.lua`.
+
 ## Settings
 
 Everything is optional; the plugin is useful with none of it. Set values from
