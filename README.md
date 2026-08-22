@@ -255,14 +255,15 @@ defensive on purpose:
   on a timer inside a process that lives for the whole session, so no single
   machine — a thousand containers, a repository with a huge untracked tree —
   can make one of them allocate without bound.
-- That includes the two files read rather than scanned. `~/.ssh/config` goes
-  through a script that stops at 256 KiB with the `Include`s already expanded,
-  and Omarchy's default-editor file is read with `head -c`. Both are
-  user-writable, and a ceiling checked after the whole file is in memory is no
-  ceiling at all. Each producer reads one extra byte and reports overflow via
-  its exit status without publishing partial data. An oversized SSH result is
-  rejected wholesale; an oversized editor path is treated as absent because a
-  half path could name the wrong binary.
+- That includes the two files read rather than scanned. The SSH producer copies
+  at most 256 KiB plus one byte from every source file into a private snapshot
+  and checks it before Bash parses any lines. `Include` globs are traversed one
+  component at a time, with cumulative NUL-delimited match metadata capped
+  before Bash materializes or processes paths. Omarchy's
+  default-editor file is likewise read with `head -c`. Both producers report
+  overflow via exit status 65. SSH output is capped at 256 KiB and is published
+  only after every source, expansion, and output check succeeds; an oversized
+  editor path is also withheld because a half path could name the wrong binary.
 - External commands use argv arrays. Potentially blocking scans and probes are
   timeout-wrapped; the bounded local editor and SSH reads are not. Nothing
   discovered on your machine is ever spliced into a shell string, and
