@@ -249,6 +249,12 @@ defensive on purpose:
   panel renders those differently, every time.
 - Malformed JSON lines, unparseable `ss` rows and broken repositories are
   skipped individually; one bad entry never takes out the scan around it.
+- Every scan caps its own output in bytes, and `Model.js` caps both the text it
+  accepts and the number of entries it collects from it. The scans run on a
+  timer inside a process that lives for the whole session, so no single machine
+  — a thousand containers, a repository with a huge untracked tree — can make
+  one of them allocate without bound. An entry cut in half by a ceiling is
+  simply one the parser skips.
 - Every external command is a `timeout`-wrapped subprocess with an argv array.
   Nothing discovered on your machine is ever spliced into a shell string, and
   identifiers that would travel as arguments are rejected if they could pass as

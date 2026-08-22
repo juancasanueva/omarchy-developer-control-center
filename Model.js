@@ -48,6 +48,35 @@ var DEFAULT_CONFIG = {
 
 var MIN_INTERVAL = 5
 
+// ---------------------------------------------------------------------------
+// Ceilings
+// ---------------------------------------------------------------------------
+//
+// The plugin lives inside the long-lived shell process, so a single oversized
+// response must not be able to pin memory for the rest of the session. The
+// scripts bound their own output; these limits are the second line of defence,
+// and the only one for ~/.ssh/config, which is read straight off disk with no
+// script in between.
+
+var MAX_COLLECTOR_BYTES = 1048576
+
+// A payload can be under the byte ceiling and still be pathologically dense,
+// so the parsers stop collecting once these many entries exist rather than
+// building the whole array and trimming it afterwards.
+var MAX_REPOS = 500
+var MAX_CONTAINERS = 500
+var MAX_SERVICES = 500
+var MAX_HOSTS = 200
+
+// Anything that is not a string is handed back untouched, so the
+// `typeof text !== "string"` guard in every parser still sees what it expects
+// and answers `null` instead of parsing an empty string as "nothing there".
+function clampText(text, limit) {
+  if (typeof text !== "string") return text
+  var max = typeof limit === "number" && isFinite(limit) && limit > 0 ? limit : MAX_COLLECTOR_BYTES
+  return text.length > max ? text.slice(0, max) : text
+}
+
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
 }
@@ -196,7 +225,7 @@ function parseRepoScan(text) {
   if (typeof text !== "string") return null
   var repos = []
   var blocks = text.split(REPO_BLOCK + "\n")
-  for (var b = 0; b < blocks.length; b++) {
+  for (var b = 0; b < blocks.length && repos.length < MAX_REPOS; b++) {
     var block = blocks[b]
     if (block.trim() === "") continue
     var endIdx = block.indexOf(REPO_END)
@@ -345,7 +374,7 @@ function parseDockerPs(text) {
   }
   var containers = []
   var lines = text.split("\n")
-  for (var i = 0; i < lines.length; i++) {
+  for (var i = 0; i < lines.length && containers.length < MAX_CONTAINERS; i++) {
     var line = lines[i].trim()
     if (line === "") continue
     var obj
@@ -477,6 +506,9 @@ function parsePorts(text) {
     if (!entry) continue
     var existing = byPort[entry.port]
     if (!existing) {
+      // Extra addresses for a port already collected still merge; it is only
+      // new ports that stop once the cap is reached.
+      if (order.length >= MAX_SERVICES) continue
       existing = { port: entry.port, address: entry.address, addresses: [], local: true, process: "", pid: 0, cwd: "", cmdline: "" }
       byPort[entry.port] = existing
       order.push(entry.port)
@@ -638,8 +670,10 @@ function parseSshConfig(text) {
     else if (key === "port") { var p = parseInt(value, 10); if (p > 0 && p < 65536) current.port = p }
   }
   var out = []
-  for (var h = 0; h < hosts.length; h++) {
-    for (var a = 0; a < hosts[h].aliases.length; a++) {
+  // A single Host line can carry any number of aliases, so the cap is checked
+  // on both loops rather than only on the number of blocks.
+  for (var h = 0; h < hosts.length && out.length < MAX_HOSTS; h++) {
+    for (var a = 0; a < hosts[h].aliases.length && out.length < MAX_HOSTS; a++) {
       var alias = hosts[h].aliases[a]
       if (alias === "" || isHostPattern(alias)) continue
       out.push({ alias: alias, hostname: hosts[h].hostname || alias, user: hosts[h].user, port: hosts[h].port, status: "unknown", latency: 0 })

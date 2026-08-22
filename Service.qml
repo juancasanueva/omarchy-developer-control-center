@@ -151,14 +151,16 @@ Item {
   // ---- Processes -----------------------------------------------------------
   //
   // Each collector keeps the previous value when a scan fails: a momentary
-  // failure should not erase what the user could see a second ago.
+  // failure should not erase what the user could see a second ago. Every
+  // response is passed through Model.clampText because the scripts already
+  // bound their own output and this is the backstop if one ever does not.
 
   Process {
     id: repoProc
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var parsed = Model.parseRepoScan(text)
+        var parsed = Model.parseRepoScan(Model.clampText(text))
         if (parsed !== null) { root.repos = parsed; root.reapplyServices() }
         else if (root.repos === null) root.repos = []
       }
@@ -170,7 +172,7 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var parsed = Model.parseDockerPs(text)
+        var parsed = Model.parseDockerPs(Model.clampText(text))
         if (parsed !== null) { root.docker = parsed; root.reapplyServices() }
         else if (root.docker === null) root.docker = { available: false, reason: "docker check failed", containers: [] }
       }
@@ -182,7 +184,7 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var parsed = Model.parsePorts(text)
+        var parsed = Model.parsePorts(Model.clampText(text))
         if (parsed !== null) { root.rawServices = parsed; root.reapplyServices() }
         else if (root.services === null) root.services = []
       }
@@ -195,7 +197,7 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         if (root.machines === null) return
-        root.machines = Model.applyProbe(root.machines, Model.parseProbe(text))
+        root.machines = Model.applyProbe(root.machines, Model.parseProbe(Model.clampText(text)))
       }
     }
   }
@@ -205,7 +207,7 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var parsed = Model.parseTools(text)
+        var parsed = Model.parseTools(Model.clampText(text))
         if (parsed !== null) root.tools = parsed
         else if (root.tools === null) root.tools = []
       }
@@ -216,7 +218,8 @@ Item {
   Process {
     id: editorProc
     command: ["bash", "-c", "cat \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/defaults/editor\" 2>/dev/null || true"]
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.defaultEditor = text }
+    // A path, not a listing, so it gets a much tighter ceiling than the rest.
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.defaultEditor = Model.clampText(text, 4096) }
   }
 
   // Only host metadata is read out of the SSH configuration; keys, identity
@@ -228,7 +231,7 @@ Item {
     printErrors: false
     onFileChanged: reload()
     onLoaded: {
-      var hosts = Model.parseSshConfig(text())
+      var hosts = Model.parseSshConfig(Model.clampText(text()))
       root.machines = hosts === null ? [] : hosts
       root.probeMachines(root.machines)
     }

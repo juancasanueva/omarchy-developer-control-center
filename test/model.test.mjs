@@ -11,6 +11,7 @@ const Model = new Function(
   source + `
   return {
     DEFAULT_CONFIG, normalizeConfig, expandHome, collapseHome, isSafeArg,
+    MAX_COLLECTOR_BYTES, clampText, MAX_REPOS, MAX_CONTAINERS, MAX_SERVICES, MAX_HOSTS,
     parseRepoScan, parsePorcelain, repoState, repoIcon, repoSummary, remoteWebUrl, sortRepos,
     parseDockerPs, parseHealth, parsePortMappings, parseComposeProject, parseExitCode,
     containerIcon, containerSummary, groupContainers, sortContainers,
@@ -216,6 +217,29 @@ test("isSafeArg refuses option-looking and control-character arguments", () => {
   assert.equal(Model.isSafeArg(null), false)
 })
 
+test("clampText returns short strings untouched and cuts long ones to the limit", () => {
+  assert.equal(Model.clampText("abc", 10), "abc")
+  assert.equal(Model.clampText("abcde", 5), "abcde")
+  assert.equal(Model.clampText("abcdef", 5), "abcde")
+})
+
+test("clampText falls back to MAX_COLLECTOR_BYTES for a missing or absurd limit", () => {
+  const long = "x".repeat(Model.MAX_COLLECTOR_BYTES + 100)
+  assert.equal(Model.clampText(long).length, Model.MAX_COLLECTOR_BYTES)
+  assert.equal(Model.clampText(long, 0).length, Model.MAX_COLLECTOR_BYTES)
+  assert.equal(Model.clampText(long, -1).length, Model.MAX_COLLECTOR_BYTES)
+  assert.equal(Model.clampText(long, "nope").length, Model.MAX_COLLECTOR_BYTES)
+})
+
+test("clampText passes non-strings through so the parsers still answer null", () => {
+  assert.equal(Model.clampText(null), null)
+  assert.equal(Model.clampText(undefined), undefined)
+  assert.equal(Model.parseRepoScan(Model.clampText(null)), null)
+  assert.equal(Model.parseDockerPs(Model.clampText(null)), null)
+  assert.equal(Model.parsePorts(Model.clampText(null)), null)
+  assert.equal(Model.parseSshConfig(Model.clampText(null)), null)
+})
+
 // ---------------------------------------------------------------------------
 // Git
 // ---------------------------------------------------------------------------
@@ -270,6 +294,18 @@ test("parseRepoScan returns null for unreadable output and [] for none", () => {
   assert.equal(Model.parseRepoScan(null), null)
   assert.deepEqual(Model.parseRepoScan(""), [])
   assert.deepEqual(Model.parseRepoScan("===repo===\n/x\n"), [])
+})
+
+test("parseRepoScan stops collecting at MAX_REPOS", () => {
+  let text = ""
+  for (let i = 0; i < Model.MAX_REPOS + 20; i++) text += `===repo===\n/home/dev/r${i}\n===remote===\n===status===\n===end===\n`
+  assert.equal(Model.parseRepoScan(text).length, Model.MAX_REPOS)
+})
+
+test("parseRepoScan drops a block the byte ceiling cut before ===end===", () => {
+  const cut = "===repo===\n/home/dev/whole\n===remote===\n===status===\n===end===\n===repo===\n/home/dev/half\n===remote===\n===sta"
+  const repos = Model.parseRepoScan(cut)
+  assert.deepEqual(repos.map(r => r.name), ["whole"])
 })
 
 test("repoState ranks conflict over dirty over behind over ahead over clean", () => {
@@ -335,6 +371,17 @@ test("parseDockerPs reports unavailable docker distinctly from zero containers",
   assert.equal(none.available, true)
   assert.deepEqual(none.containers, [])
   assert.equal(Model.parseDockerPs(null), null)
+})
+
+test("parseDockerPs stops collecting at MAX_CONTAINERS", () => {
+  let text = ""
+  for (let i = 0; i < Model.MAX_CONTAINERS + 20; i++) text += `{"ID":"id${i}","Names":"c${i}","State":"running","Status":"Up 1 hour"}\n`
+  assert.equal(Model.parseDockerPs(text).containers.length, Model.MAX_CONTAINERS)
+})
+
+test("parseDockerPs skips a json line the byte ceiling cut mid-object", () => {
+  const cut = `{"ID":"whole","Names":"whole","State":"running","Status":"Up 1 hour"}\n{"ID":"half","Names":"ha`
+  assert.deepEqual(Model.parseDockerPs(cut).containers.map(c => c.name), ["whole"])
 })
 
 test("parseHealth and parseExitCode read docker status strings", () => {
@@ -406,6 +453,12 @@ test("parsePorts dedupes a port listening on several addresses and attaches cwd/
   assert.match(s3000.cmdline, /next dev/)
   assert.equal(s3000.local, false)
   assert.equal(rawServices.find(s => s.port === 5173).local, true)
+})
+
+test("parsePorts stops collecting at MAX_SERVICES", () => {
+  let text = "===ss===\n"
+  for (let i = 0; i < Model.MAX_SERVICES + 20; i++) text += `LISTEN 0 4096 0.0.0.0:${1000 + i} 0.0.0.0:*\n`
+  assert.equal(Model.parsePorts(text).length, Model.MAX_SERVICES)
 })
 
 test("parseProcLines tolerates missing or malformed rows", () => {
@@ -491,6 +544,14 @@ test("parseSshConfig returns null when unreadable and [] when empty", () => {
   assert.equal(Model.parseSshConfig(null), null)
   assert.deepEqual(Model.parseSshConfig(""), [])
   assert.deepEqual(Model.parseSshConfig("Host *\n  User x\n"), [])
+})
+
+test("parseSshConfig stops collecting at MAX_HOSTS aliases", () => {
+  let text = ""
+  for (let i = 0; i < Model.MAX_HOSTS + 20; i++) text += `Host h${i}\n  HostName 10.0.0.${i % 255}\n`
+  assert.equal(Model.parseSshConfig(text).length, Model.MAX_HOSTS)
+  // One Host line can carry many aliases, so the cap has to hold there too.
+  assert.equal(Model.parseSshConfig("Host " + Array.from({ length: Model.MAX_HOSTS + 20 }, (_, i) => `a${i}`).join(" ")).length, Model.MAX_HOSTS)
 })
 
 test("parseProbe and applyProbe attach availability and latency", () => {
