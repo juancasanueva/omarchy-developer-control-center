@@ -12,9 +12,11 @@ export LC_ALL=C
 readonly max_bytes=262144
 readonly max_metadata_bytes=262144
 readonly overflow_exit=65
+readonly missing_exit=66
+readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly snapshot_helper="$script_dir/ssh-source-snapshot.py"
 
 config="$HOME/.ssh/config"
-[[ -r "$config" && -f "$config" ]] || exit 0
 
 umask 077
 tmp_dir=$(mktemp -d) || exit 1
@@ -27,17 +29,11 @@ metadata_bytes=0
 snapshot_path=""
 
 snapshot_source() {
-  local file="$1" depth="$2" bytes rc
+  local file="$1" depth="$2"
 
   snapshot_path="$tmp_dir/source.$depth"
-  head -c $((max_bytes + 1)) -- "$file" > "$snapshot_path"
-  rc=$?
-  (( rc == 0 )) || return "$rc"
-
-  bytes=$(wc -c < "$snapshot_path")
-  rc=$?
-  (( rc == 0 )) || return "$rc"
-  (( bytes <= max_bytes )) || return "$overflow_exit"
+  timeout --signal=TERM --kill-after=1s 2s \
+    python3 -I "$snapshot_helper" "$file" "$snapshot_path" "$max_bytes"
 }
 
 append_output_line() {
@@ -61,8 +57,9 @@ append_metadata_path() {
 # only classified as overflow when the cap + 1 byte in that file proves it.
 collect_component_matches() {
   local parent="$1" component="$2" destination="$3"
-  local chunk="$tmp_dir/find.chunk" remaining bytes rc find_rc head_rc
-  local -a find_args=(-H "$parent" -mindepth 1 -maxdepth 1 -name "$component")
+  local chunk="$tmp_dir/find.chunk" search_parent remaining bytes rc find_rc head_rc
+  search_parent="${parent%/}/"
+  local -a find_args=(-H "$search_parent" -mindepth 1 -maxdepth 1 -name "$component")
 
   if [[ "$component" != .* ]]; then
     find_args+=(! -name '.*')
@@ -117,11 +114,9 @@ expand_pattern() {
         else
           candidate="$parent/$component"
         fi
-        if [[ -e "$candidate" || -L "$candidate" ]]; then
-          append_metadata_path "$candidate" "$next"
-          rc=$?
-          (( rc == 0 )) || return "$rc"
-        fi
+        append_metadata_path "$candidate" "$next"
+        rc=$?
+        (( rc == 0 )) || return "$rc"
       else
         collect_component_matches "$parent" "$component" "$next"
         rc=$?
@@ -138,11 +133,10 @@ expand_pattern() {
   done
 
   while IFS= read -r -d '' path; do
-    if [[ -r "$path" && -f "$path" ]]; then
-      emit "$path" "$depth"
-      rc=$?
-      (( rc == 0 )) || return "$rc"
-    fi
+    emit "$path" "$depth"
+    rc=$?
+    (( rc == missing_exit )) && continue
+    (( rc == 0 )) || return "$rc"
   done < "$current"
 }
 
@@ -174,6 +168,7 @@ emit() {
 
 emit "$config" 0
 rc=$?
+(( rc == missing_exit )) && exit 0
 (( rc == 0 )) || exit "$rc"
 
 cat -- "$output_file"

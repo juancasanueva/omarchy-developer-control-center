@@ -255,18 +255,24 @@ defensive on purpose:
   on a timer inside a process that lives for the whole session, so no single
   machine — a thousand containers, a repository with a huge untracked tree —
   can make one of them allocate without bound.
-- That includes the two files read rather than scanned. The SSH producer copies
-  at most 256 KiB plus one byte from every source file into a private snapshot
-  and checks it before Bash parses any lines. `Include` globs are traversed one
-  component at a time, with cumulative NUL-delimited match metadata capped
-  before Bash materializes or processes paths. Omarchy's
+- That includes the two files read rather than scanned. The SSH producer opens
+  each top-level or `Include` source once, refuses a symlink in the final path
+  component, immediately validates that same descriptor as a regular file, and
+  copies at most 256 KiB plus one byte from that descriptor into a private
+  snapshot. Intermediate directory symlinks may still be followed. `Include`
+  globs are traversed one component at a time, with cumulative NUL-delimited
+  match metadata capped before Bash materializes or processes paths. Omarchy's
   default-editor file is likewise read with `head -c`. Both producers report
-  overflow via exit status 65. SSH output is capped at 256 KiB and is published
-  only after every source, expansion, and output check succeeds; an oversized
-  editor path is also withheld because a half path could name the wrong binary.
+  overflow via exit status 65. Only a source that disappears with `ENOENT` is
+  skipped; `ENOTDIR`, permission, type, and traversal failures abort the
+  transaction. SSH output is capped at 256 KiB and is published only after
+  every source, expansion, and output check succeeds; an oversized editor path
+  is also withheld because a half path could name the wrong binary.
 - External commands use argv arrays. Potentially blocking scans and probes are
-  timeout-wrapped; the bounded local editor and SSH reads are not. Nothing
-  discovered on your machine is ever spliced into a shell string, and
+  timeout-wrapped. Every SSH source snapshot also runs under a finite two-second
+  TERM deadline followed by KILL one second later, so a replaced or hostile
+  source cannot leave the recurring collector stuck. Nothing discovered on your
+  machine is ever spliced into a shell string, and
   identifiers that would travel as arguments are rejected if they could pass
   as options — an SSH alias called `-oProxyCommand=…` gets no Connect action.
 - Actions are detached, so they survive the plugin reload that a code change
@@ -291,11 +297,11 @@ hot-reloads.
 
 ## Requirements
 
-Omarchy 4 with the Omarchy shell, and `git`. Everything else is optional and
-degrades on its own terms: without Docker the Containers section explains
-itself, without `ss` there are no services, without `~/.ssh/config` there are
-no machines, and without lazygit or lazydocker those actions simply do not
-appear.
+Omarchy 4 with the Omarchy shell, `git`, Python 3, and GNU `timeout`. Everything
+else is optional and degrades on its own terms: without Docker the Containers
+section explains itself, without `ss` there are no services, without
+`~/.ssh/config` there are no machines, and without lazygit or lazydocker those
+actions simply do not appear.
 
 ## License
 
